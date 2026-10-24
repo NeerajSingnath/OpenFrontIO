@@ -74,3 +74,15 @@ export function dominatorAttackBudget(
   );
   return Math.max(0, Math.floor(observation.currentTroops - reserve));
 }
+/** Local experiment: applies only to the nation at the configured roster index. */
+export const DOMINATOR_EXPERIMENT_ENABLED = true;
+export const DOMINATOR_TEST_NATION_INDEX = 0;
+
+/** This function has no simulation state, so it is safe across save/restore. */
+export function isDominatorNation(
+  playerId: string,
+  selectedNationId: string | undefined,
+  enabled: boolean = DOMINATOR_EXPERIMENT_ENABLED,
+): boolean {
+  return enabled && selectedNationId !== undefined && playerId === selectedNationId;
+}

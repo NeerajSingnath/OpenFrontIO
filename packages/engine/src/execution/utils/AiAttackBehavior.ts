@@ -41,6 +41,11 @@ import type {
 import { AttackExecution } from "../AttackExecution";
 import { DonateTroopsExecution } from "../DonateTroopExecution";
 import { planBotAttacks, walledInBots } from "../nation/BotAnnexation";
+import {
+  DOMINATOR_TEST_NATION_INDEX,
+  dominatorReserveRatio,
+  isDominatorNation,
+} from "../nation/DominatorPolicy";
 import { NationAllianceBehavior } from "../nation/NationAllianceBehavior";
 import {
   EMOJI_ASSIST_ACCEPT,
@@ -629,10 +634,43 @@ export class AiAttackBehavior {
       );
   }
 
+  /** Experimental reserve for exactly one nation; others use the upstream AI unchanged. */
+  private effectiveReserveRatio(): number {
+    const selectedNation = this.game.nations()[DOMINATOR_TEST_NATION_INDEX];
+    if (!isDominatorNation(this.player.id(), selectedNation?.playerInfo.id)) {
+      return this.reserveRatio;
+    }
+
+    const neighbors = this.player.nearby();
+    let strongestHostileNeighborTroops = 0;
+    for (const neighbor of neighbors) {
+      if (neighbor.isPlayer() && !this.player.isFriendly(neighbor)) {
+        strongestHostileNeighborTroops = Math.max(
+          strongestHostileNeighborTroops,
+          neighbor.troops(),
+        );
+      }
+    }
+
+    let incomingHostileTroops = 0;
+    for (const attack of this.player.incomingAttacks()) {
+      if (!this.player.isFriendly(attack.attacker())) {
+        incomingHostileTroops += attack.troops();
+      }
+    }
+
+    return dominatorReserveRatio({
+      currentTroops: this.player.troops(),
+      maxTroops: this.game.config().maxTroops(this.player),
+      strongestHostileNeighborTroops,
+      incomingHostileTroops,
+      hasUnclaimedLand: neighbors.some((neighbor) => !neighbor.isPlayer()),
+    });
+  }
   private hasReserveRatioTroops(): boolean {
     const maxTroops = this.game.config().maxTroops(this.player);
     const ratio = this.player.troops() / maxTroops;
-    return ratio >= this.reserveRatio;
+    return ratio >= this.effectiveReserveRatio();
   }
 
   private hasTriggerRatioTroops(expansion = false): boolean {
@@ -728,7 +766,7 @@ export class AiAttackBehavior {
       troops - maxTroops * this.expandRatio,
       this.neighborTroopCap(attacker),
     );
-    const aboveReserve = troops - maxTroops * this.reserveRatio;
+    const aboveReserve = troops - maxTroops * this.effectiveReserveRatio();
     const counter = incoming + Math.max(0, attacker.troops() - pressing);
     const send =
       spare >= counter
@@ -741,7 +779,7 @@ export class AiAttackBehavior {
   strikeTroops(target: Player): number {
     const maxTroops = this.game.config().maxTroops(this.player);
     return Math.min(
-      this.player.troops() - maxTroops * this.reserveRatio,
+      this.player.troops() - maxTroops * this.effectiveReserveRatio(),
       this.troopSendCap(target),
     );
   }
@@ -1405,7 +1443,7 @@ export class AiAttackBehavior {
     // Use the expand ratio when attacking a bot that owns structures — we need to
     // recapture those structures ASAP, even before reaching the normal reserve.
     const useReserve = target.isPlayer() && !botWithStructures;
-    const reserveRatio = useReserve ? this.reserveRatio : this.expandRatio;
+    const reserveRatio = useReserve ? this.effectiveReserveRatio() : this.expandRatio;
     const targetTroops = maxTroops * reserveRatio;
 
     let troops;
@@ -1992,7 +2030,7 @@ export class AiAttackBehavior {
 
     // Donate a portion of our troops (keeping reserve)
     const maxTroops = this.game.config().maxTroops(this.player);
-    const troopsToKeep = maxTroops * this.reserveRatio;
+    const troopsToKeep = maxTroops * this.effectiveReserveRatio();
     const availableTroops = this.player.troops() - troopsToKeep;
 
     if (availableTroops < 1) {
