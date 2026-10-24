@@ -41,6 +41,7 @@ import type {
 import { AttackExecution } from "../AttackExecution";
 import { DonateTroopsExecution } from "../DonateTroopExecution";
 import { planBotAttacks, walledInBots } from "../nation/BotAnnexation";
+import { scoreDominatorTarget } from "../nation/DominatorTargetPolicy";
 import {
   DOMINATOR_TEST_NATION_INDEX,
   dominatorReserveRatio,
@@ -497,6 +498,54 @@ export class AiAttackBehavior {
 
     const bots = (): boolean => this.attackBots();
 
+    // v0.2: additive experiment; return false to preserve all default strategies.
+    const dominatorStrategy = (): boolean => {
+      const selected = this.game.nations()[DOMINATOR_TEST_NATION_INDEX];
+      if (!isDominatorNation(this.player.id(), selected?.playerInfo.id)) {
+        return false;
+      }
+
+      const hostileAttacks = this.player.incomingAttacks().filter(
+        (attack) => !this.player.isFriendly(attack.attacker()),
+      );
+      const incomingHostileTroops = hostileAttacks.reduce(
+        (total, attack) => total + attack.troops(),
+        0,
+      );
+
+      const target = pick((enemies) => {
+        let highestScore = -Infinity;
+        let best: Player | null = null;
+        for (const enemy of enemies) {
+          // Bot annexation has a dedicated planner; don't override it.
+          if (enemy.type() === PlayerType.Bot || this.player.isFriendly(enemy)) {
+            continue;
+          }
+          const economicLevels = enemy.units().reduce((total, unit) => {
+            const type = unit.type();
+            return type === UnitType.City || type === UnitType.Port || type === UnitType.Factory
+              ? total + unit.level()
+              : total;
+          }, 0);
+          const score = scoreDominatorTarget({
+            ownTroops: this.player.troops(),
+            enemyTroops: enemy.troops(),
+            enemyTiles: enemy.numTilesOwned(),
+            enemyEconomicLevels: economicLevels,
+            enemyAttackingUs: hostileAttacks.some((a) => a.attacker() === enemy),
+            incomingHostileTroops,
+            landBorder: this.bordersByLand(enemy),
+          });
+          if (score !== null && score > highestScore) {
+            highestScore = score;
+            best = enemy;
+          }
+        }
+        return best;
+      });
+      return target !== null ? this.sendAttack(target) : false;
+    };
+
     const assist = (): boolean => this.assistAllies();
 
     const traitor = (): boolean => {
@@ -616,7 +665,7 @@ export class AiAttackBehavior {
         return [bots, assist, betray, nuked, traitor, afk, hated, veryWeak, juicy, victim, crown, weakest, island, donate];
       case Difficulty.Impossible:
         // prettier-ignore
-        return [bots, veryWeak, betray, assist, victim, crown, traitor, juicy, afk, nuked, hated, weakest, island, donate];
+        return [bots, dominatorStrategy, veryWeak, betray, assist, victim, crown, traitor, juicy, afk, nuked, hated, weakest, island, donate];
       default:
         assertNever(difficulty);
     }
